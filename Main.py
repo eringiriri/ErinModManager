@@ -18,7 +18,7 @@ class JapanizerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(WINDOW_TITLE)
-        self.geometry("520x210")  # ウィンドウの高さを調整
+        self.geometry(WINDOW_SIZE)
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -51,14 +51,22 @@ class JapanizerGUI(tk.Tk):
         # ステータス表示ラベル
         self.status_label = ttk.Label(self, text="準備完了", foreground=LABEL_STATUS_COLOR)
         self.status_label.pack(fill="x", padx=10, pady=5)
+        
+        # --- メイン操作ボタン ---
+        actions_frame = ttk.Frame(self)
+        actions_frame.pack(fill='x', padx=10, pady=5)
 
         # バックアップボタン
-        self.backup_button = ttk.Button(self, text="全てのMODをバックアップ", command=self._backup_mods)
-        self.backup_button.pack(fill="x", padx=10, pady=5)
+        self.backup_button = ttk.Button(actions_frame, text="全てのMODをバックアップ", command=self._backup_mods)
+        self.backup_button.pack(fill="x", pady=(0, 5))
+
+        # 一括日本語化ボタン (新規追加)
+        self.apply_all_jp_button = ttk.Button(actions_frame, text="一括日本語ファイル適用", command=self._apply_all_jp_files)
+        self.apply_all_jp_button.pack(fill="x")
 
         # --- フォルダを開くボタンエリア ---
         folder_frame = ttk.LabelFrame(self, text="フォルダを開く")
-        folder_frame.pack(fill="x", padx=10, pady=(0, 5))
+        folder_frame.pack(fill="x", padx=10, pady=(10, 5))
 
         folder_buttons_subframe = ttk.Frame(folder_frame)
         folder_buttons_subframe.pack(fill="x", padx=5, pady=5)
@@ -92,6 +100,10 @@ class JapanizerGUI(tk.Tk):
 
     def _backup_mods(self):
         self._start_worker_thread(target=backup_mods, args=(self.pman,))
+        
+    def _apply_all_jp_files(self):
+        """(未実装) 一括日本語化処理を呼び出す"""
+        self.pman.popup_info("この機能はまだ実装されていません。")
 
     # --- pmanから呼ばれるUI更新メソッド ---
     def set_status(self, text):

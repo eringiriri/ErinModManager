@@ -17,7 +17,7 @@ ZIP_FILENAME_FMT = "{}_download.zip"
 UNPACK_DIR_FMT = "{}_unpack"
 
 WINDOW_TITLE = "RimWorld MOD 日本語化インストーラー"
-WINDOW_SIZE = "520x160"
+WINDOW_SIZE = "520x240"
 LABEL_DESCRIPTION = "日本語化パックのURLを入力し、Enterを押してください。"
 ENTRY_WIDTH = 70
 LABEL_STATUS_COLOR = "#007000"
