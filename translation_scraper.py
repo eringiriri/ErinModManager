@@ -7,6 +7,14 @@ import sys
 import re
 from datetime import datetime
 
+try:
+    import chardet
+    CHARDET_AVAILABLE = True
+except ImportError:
+    CHARDET_AVAILABLE = False
+    print("警告: chardetライブラリがインストールされていません。文字コード自動検出が無効になります。")
+    print("インストールするには: pip install chardet")
+
 # --- 設定 ---
 from config import LOGS_DIR
 
@@ -16,9 +24,19 @@ OUTPUT_FILENAME = "rimworld_translation_list.csv"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
-TIMEOUT = 30
+TIMEOUT = 300
 
 # --- ヘルパー関数 ---
+
+def sanitize_text(text):
+    """テキストをCSV出力用にサニタイズする"""
+    if not text:
+        return ""
+    # 制御文字や改行文字を除去
+    text = re.sub(r'[\r\n\t]', ' ', str(text))
+    # 連続する空白を1つにまとめる
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
 
 def format_mod_update_date(mod_update_str, jp_upload_str):
     """
@@ -43,7 +61,7 @@ def format_mod_update_date(mod_update_str, jp_upload_str):
 
 # --- メイン処理 ---
 
-def scrape_and_save_to_csv():
+def scrape_and_save_to_csv(pman=None):
     """
     サイトの全ページを巡回し、MOD情報を取得してCSVファイルに保存します。
     現在の処理状況をコンソールに詳細表示します。
@@ -51,7 +69,10 @@ def scrape_and_save_to_csv():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_filepath = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
 
-    print(f"データの取得を開始します...")
+    if pman:
+        pman.set_progress("データの取得を開始します...")
+    else:
+        print(f"データの取得を開始します...")
     print(f"出力ファイル: {os.path.abspath(output_filepath)}")
 
     processed_count = 0
@@ -67,13 +88,31 @@ def scrape_and_save_to_csv():
             while True:
                 url = URL_FMT.format(page_number)
                 sys.stdout.write(f"\r{' ' * 100}\r")
-                print(f"--- ページ {page_number + 1} ({url}) の処理を開始 ---")
+                page_info = f"ページ {page_number + 1} の処理を開始"
+                print(f"--- {page_info} ({url}) ---")
+                if pman:
+                    pman.set_progress(page_info)
                 scanned_pages = page_number + 1
 
                 try:
                     response = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
                     response.raise_for_status()
-                    response.encoding = 'EUC-JP'
+                    
+                    # 文字コードを自動検出して設定
+                    if CHARDET_AVAILABLE:
+                        detected_encoding = chardet.detect(response.content)
+                        if detected_encoding['encoding'] and detected_encoding['confidence'] > 0.7:
+                            response.encoding = detected_encoding['encoding']
+                            print(f"  文字コードを検出: {detected_encoding['encoding']} (信頼度: {detected_encoding['confidence']:.2f})")
+                        else:
+                            # 検出に失敗した場合はUTF-8を試す
+                            response.encoding = 'utf-8'
+                            print(f"  文字コード検出失敗、UTF-8を使用")
+                    else:
+                        # chardetが利用できない場合はUTF-8を使用
+                        response.encoding = 'utf-8'
+                        print(f"  UTF-8を使用（chardet未インストール）")
+                        
                 except requests.exceptions.RequestException as e:
                     print(f"\nエラー: ページ {page_number + 1} の取得に失敗しました: {e}", file=sys.stderr)
                     break
@@ -99,15 +138,18 @@ def scrape_and_save_to_csv():
                             continue
 
                         is_data_found_on_page = True
-                        print(f"  - File ID: {file_id} を処理中...")
+                        file_info = f"File ID: {file_id} を処理中"
+                        print(f"  - {file_info}...")
+                        if pman:
+                            pman.set_progress(f"ページ {page_number + 1} - {file_info}")
 
                         mod_cell = cells[1]
-                        mod_id = mod_cell.text.strip()
-                        mod_name = mod_cell.find('a', title=True)['title'].strip() if mod_cell.find('a', title=True) else ""
+                        mod_id = sanitize_text(mod_cell.text.strip())
+                        mod_name = sanitize_text(mod_cell.find('a', title=True)['title'].strip() if mod_cell.find('a', title=True) else "")
                         
-                        mod_update_text = cells[2].text.strip()
-                        jp_upload_date = cells[4].text.strip()
-                        size = cells[5].text.strip()
+                        mod_update_text = sanitize_text(cells[2].text.strip())
+                        jp_upload_date = sanitize_text(cells[4].text.strip())
+                        size = sanitize_text(cells[5].text.strip())
                         
                         mod_update_date_formatted = format_mod_update_date(mod_update_text, jp_upload_date)
                         
@@ -129,10 +171,13 @@ def scrape_and_save_to_csv():
     except Exception as e:
         print(f"\n予期せぬエラーが発生しました: {e}", file=sys.stderr)
     finally:
+        completion_info = f"処理完了 - スキャン: {scanned_pages}ページ, 取得: {processed_count}件"
         print(f"\n--- 処理完了 ---")
         print(f"スキャンした総ページ数: {scanned_pages} ページ")
         print(f"取得した総データ件数: {processed_count} 件")
         print(f"データは {os.path.abspath(output_filepath)} に保存されました。")
+        if pman:
+            pman.set_progress(completion_info)
 
 if __name__ == '__main__':
     scrape_and_save_to_csv()

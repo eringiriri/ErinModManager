@@ -49,9 +49,24 @@ def force_remove(func, path, exc_info):
     func(path)
 
 def find_japanese_dir(root):
-    """指定されたフォルダ内で'Japanese'という名前のフォルダを探す"""
+    """指定されたフォルダ内で'Japanese'または'Japanese (日本語)'という名前のフォルダを探す"""
+    japanese_variants = [
+        JP_DIR_NAME,  # "Japanese"
+        "Japanese (日本語)",
+        "Japanese(日本語)",
+        "Japanese_日本語",
+        "Japanese-日本語"
+    ]
+    
     for dirpath, dirnames, _ in os.walk(root):
         for dirname in dirnames:
-            if JP_DIR_NAME.lower() == dirname.lower():
+            # 完全一致チェック
+            if dirname in japanese_variants:
+                return os.path.join(dirpath, dirname)
+            # 大文字小文字を無視したチェック
+            if any(variant.lower() == dirname.lower() for variant in japanese_variants):
+                return os.path.join(dirpath, dirname)
+            # "Japanese"で始まるフォルダもチェック
+            if dirname.lower().startswith("japanese"):
                 return os.path.join(dirpath, dirname)
     return None

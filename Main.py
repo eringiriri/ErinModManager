@@ -8,10 +8,34 @@ from tkinter import ttk
 
 from config import *
 from utils import extract_mod_id, fix_url, force_remove, find_japanese_dir
-from downloader import download_zip, is_zip_file, extract_zip
+from downloader import download_zip, is_archive_file, extract_archive
 from pages import open_mod_pages, open_steam_workshop
-from mods_backup import backup_mods
-from progress_utils import ProgressManager
+from backup_manager import backup_mods
+# ProgressManagerクラスを統合
+class ProgressManager:
+    """GUIのUI更新を管理し、別スレッドから安全に呼び出すためのクラス"""
+    def __init__(self, gui):
+        self.gui = gui
+
+    def set_status(self, text):
+        self.gui.set_status(text)
+        
+    def set_progress(self, text):
+        self.gui.set_status(text)
+
+    def popup_info(self, message):
+        self.gui.popup_info(message)
+
+    def popup_error(self, message):
+        self.gui.popup_error(message)
+
+    def popup_warning(self, message):
+        self.gui.popup_warning(message)
+
+    def popup_retry_cancel(self, message):
+        return self.gui.popup_retry_cancel(message)
+from auto_japanizer import run_auto_japanization
+from translation_checker import check_translation_updates
 
 
 class JapanizerGUI(tk.Tk):
@@ -28,6 +52,7 @@ class JapanizerGUI(tk.Tk):
         self._create_widgets()
         self._set_bindings()
         self.worker_thread = None
+        self._update_button_styles()  # 初期状態でボタンスタイルを更新
 
     def _create_widgets(self):
         """GUIのウィジェットを配置する"""
@@ -53,16 +78,42 @@ class JapanizerGUI(tk.Tk):
         self.status_label.pack(fill="x", padx=10, pady=5)
         
         # --- メイン操作ボタン ---
-        actions_frame = ttk.Frame(self)
+        actions_frame = ttk.LabelFrame(self, text="メイン操作")
         actions_frame.pack(fill='x', padx=10, pady=5)
 
-        # バックアップボタン
-        self.backup_button = ttk.Button(actions_frame, text="全てのMODをバックアップ", command=self._backup_mods)
-        self.backup_button.pack(fill="x", pady=(0, 5))
+        # ボタンを3列に配置
+        button_frame = ttk.Frame(actions_frame)
+        button_frame.pack(fill='x', padx=5, pady=5)
 
-        # 一括日本語化ボタン (新規追加)
-        self.apply_all_jp_button = ttk.Button(actions_frame, text="一括日本語ファイル適用", command=self._apply_all_jp_files)
-        self.apply_all_jp_button.pack(fill="x")
+        # 左列
+        left_frame = ttk.Frame(button_frame)
+        left_frame.pack(side="left", fill="x", expand=True, padx=(0, 2))
+
+        # 中央列
+        center_frame = ttk.Frame(button_frame)
+        center_frame.pack(side="left", fill="x", expand=True, padx=2)
+
+        # 右列
+        right_frame = ttk.Frame(button_frame)
+        right_frame.pack(side="right", fill="x", expand=True, padx=(2, 0))
+
+        # 左列：バックアップボタン
+        self.backup_button = ttk.Button(left_frame, text="MODバックアップ", command=self._backup_mods)
+        self.backup_button.pack(fill="x")
+
+        # 中央列：翻訳関連ボタン
+        self.update_csv_button = ttk.Button(center_frame, text="更新チェック", command=self._update_translation_list)
+        self.update_csv_button.pack(fill="x", pady=(0, 5))
+
+        self.full_scrape_button = ttk.Button(center_frame, text="📥 全ページ取得", command=self._full_scrape_translation_list)
+        self.full_scrape_button.pack(fill="x")
+
+        # 右列：適用・削除ボタン
+        self.apply_all_jp_button = ttk.Button(right_frame, text="一括日本語化適用", command=self._apply_all_jp_files)
+        self.apply_all_jp_button.pack(fill="x", pady=(0, 5))
+
+        self.delete_csv_button = ttk.Button(right_frame, text="CSV削除", command=self._delete_csv)
+        self.delete_csv_button.pack(fill="x")
 
         # --- フォルダを開くボタンエリア ---
         folder_frame = ttk.LabelFrame(self, text="フォルダを開く")
@@ -93,17 +144,144 @@ class JapanizerGUI(tk.Tk):
             return
         self.worker_thread = threading.Thread(target=target, args=args, daemon=True)
         self.worker_thread.start()
+        self._set_buttons_running_state(True)
 
     def _start_install(self, event=None):
         url = self.url_entry.get().strip()
-        self._start_worker_thread(target=self._install_japanized, args=(url,))
+        self._start_worker_thread(target=self._install_worker, args=(url,))
+        
+    def _install_worker(self, url):
+        """個別インストールのワーカー関数"""
+        try:
+            self._install_japanized(url)
+        finally:
+            self._set_buttons_running_state(False)  # 処理完了後にボタン状態を戻す
+            # CSVの状態を再確認してボタンスタイルを更新
+            self._update_button_styles()
 
     def _backup_mods(self):
-        self._start_worker_thread(target=backup_mods, args=(self.pman,))
+        self._start_worker_thread(target=self._backup_worker, args=())
+        
+    def _backup_worker(self):
+        """バックアップのワーカー関数"""
+        try:
+            backup_mods(self.pman)
+        finally:
+            self._set_buttons_running_state(False)  # 処理完了後にボタン状態を戻す
+            # CSVの状態を再確認してボタンスタイルを更新
+            self._update_button_styles()
         
     def _apply_all_jp_files(self):
-        """(未実装) 一括日本語化処理を呼び出す"""
-        self.pman.popup_info("この機能はまだ実装されていません。")
+        """一括日本語化処理を呼び出す"""
+        self._start_worker_thread(target=self._apply_all_jp_worker, args=())
+        
+    def _apply_all_jp_worker(self):
+        """一括日本語化のワーカー関数"""
+        try:
+            run_auto_japanization(self.pman)
+        finally:
+            self._set_buttons_running_state(False)  # 処理完了後にボタン状態を戻す
+            # CSVの状態を再確認してボタンスタイルを更新
+            self._update_button_styles()
+        
+    def _update_translation_list(self):
+        """翻訳リストを更新する（CSVがあるときのみ）"""
+        csv_path = os.path.join(LOGS_DIR, "rimworld_translation_list.csv")
+        if not os.path.exists(csv_path):
+            self.pman.popup_warning("CSVファイルが存在しません。\n「全ページ取得」ボタンで新規作成してください。")
+            return
+        self._start_worker_thread(target=self._update_csv_worker, args=())
+        
+    def _full_scrape_translation_list(self):
+        """全ページを取得して翻訳リストを作成する"""
+        self._start_worker_thread(target=self._full_scrape_worker, args=())
+        
+    def _update_csv_worker(self):
+        """CSV更新のワーカー関数"""
+        try:
+            check_translation_updates(self.pman)
+        finally:
+            self._set_buttons_running_state(False)  # 処理完了後にボタン状態を戻す
+            # CSVの状態を再確認してボタンスタイルを更新
+            self._update_button_styles()
+            
+    def _full_scrape_worker(self):
+        """全ページ取得のワーカー関数"""
+        try:
+            from translation_scraper import scrape_and_save_to_csv
+            scrape_and_save_to_csv(self.pman)
+            self.pman.popup_info("全ページ取得が完了しました。\n「一括日本語ファイル適用」ボタンで適用できます。")
+        finally:
+            self._set_buttons_running_state(False)  # 処理完了後にボタン状態を戻す
+            # CSVの状態を再確認してボタンスタイルを更新
+            self._update_button_styles()
+            
+    def _delete_csv(self):
+        """CSVファイルを削除する"""
+        csv_path = os.path.join(LOGS_DIR, "rimworld_translation_list.csv")
+        
+        if not os.path.exists(csv_path):
+            self.pman.popup_info("CSVファイルは存在しません。")
+            return
+            
+        # 確認ダイアログ
+        if messagebox.askyesno("確認", "CSVファイルを削除しますか？\n\n削除後は「最新翻訳チェック」で新規作成できます。"):
+            try:
+                os.remove(csv_path)
+                self.pman.popup_info("CSVファイルを削除しました。")
+                # ボタン状態を強制的に更新（CSV削除後の状態）
+                self._force_update_button_styles()
+            except Exception as e:
+                self.pman.popup_error(f"CSVファイルの削除に失敗しました。\n{e}")
+                
+    def _set_buttons_running_state(self, is_running):
+        """処理実行中のボタン状態を制御"""
+        if is_running:
+            # 実行中：すべてのボタンを無効化
+            self.install_button.config(state="disabled")
+            self.backup_button.config(state="disabled")
+            self.apply_all_jp_button.config(state="disabled")
+            self.update_csv_button.config(state="disabled")
+            self.full_scrape_button.config(state="disabled")
+            self.delete_csv_button.config(state="disabled")
+        else:
+            # 待機中：通常の状態に戻す
+            self.install_button.config(state="normal")
+            self.backup_button.config(state="normal")
+            # 翻訳関連ボタンを有効にする
+            self.update_csv_button.config(state="normal")
+            self.full_scrape_button.config(state="normal")
+            self._update_button_styles()  # CSVの状態に応じて更新
+            
+    def _force_update_button_styles(self):
+        """CSV削除後のボタンスタイルを強制更新"""
+        # CSVが存在しない状態に強制設定
+        self.update_csv_button.config(text="更新チェック", style="TButton")
+        self.delete_csv_button.config(state="disabled")
+        self.apply_all_jp_button.config(state="disabled")
+        # 翻訳関連ボタンは常に有効
+        self.update_csv_button.config(state="normal")
+        self.full_scrape_button.config(state="normal")
+        
+    def _update_button_styles(self):
+        """CSVファイルの存在に応じてボタンスタイルを更新"""
+        csv_path = os.path.join(LOGS_DIR, "rimworld_translation_list.csv")
+        csv_exists = os.path.exists(csv_path)
+        
+        if csv_exists:
+            # CSVが存在する場合：通常のスタイル
+            self.update_csv_button.config(text="更新チェック", style="TButton")
+            self.delete_csv_button.config(state="normal")
+            self.apply_all_jp_button.config(state="normal")
+        else:
+            # CSVが存在しない場合：目立つスタイル
+            self.update_csv_button.config(text="更新チェック", style="TButton")
+            self.delete_csv_button.config(state="disabled")
+            self.apply_all_jp_button.config(state="disabled")
+        
+        # 翻訳関連ボタンは常に有効（中止後も含む）
+        self.update_csv_button.config(state="normal")
+        self.full_scrape_button.config(state="normal")
 
     # --- pmanから呼ばれるUI更新メソッド ---
     def set_status(self, text):
@@ -170,16 +348,16 @@ class JapanizerGUI(tk.Tk):
             zip_path = os.path.join(TMP_DIR, ZIP_FILENAME_FMT.format(mod_id))
             download_zip(fixed_url, mod_id, zip_path, self.pman)
 
-            # --- ZIP展開 ---
-            if not is_zip_file(zip_path):
+            # --- アーカイブ展開 ---
+            if not is_archive_file(zip_path):
                 open_mod_pages(mod_id)
-                self.pman.popup_error("ダウンロードファイルがZIP形式ではありません。\nMOD配布ページを開きます。")
+                self.pman.popup_error("ダウンロードファイルがアーカイブ形式ではありません。\nMOD配布ページを開きます。")
                 return
 
             unpack_dir = os.path.join(TMP_DIR, UNPACK_DIR_FMT.format(mod_id))
             if os.path.exists(unpack_dir):
                 shutil.rmtree(unpack_dir, onerror=force_remove)
-            extract_zip(zip_path, unpack_dir, self.pman)
+            extract_archive(zip_path, unpack_dir, self.pman)
 
             # --- Japaneseフォルダの検出とコピー ---
             jp_dir = find_japanese_dir(unpack_dir)
