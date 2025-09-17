@@ -10,7 +10,6 @@ from collections import defaultdict
 from config import MODS_DIR, LOCAL_MODS_DIR, LOGS_DIR, TMP_DIR, OLD_DIR, LANG_DIR_NAME, JP_DIR_NAME
 from utils import sanitize_filename, get_mod_name_from_xml, force_remove, find_japanese_dir
 from downloader import download_zip, is_archive_file, extract_archive
-# ProgressManagerは不要（Main.pyに統合済み）
 from translation_scraper import scrape_and_save_to_csv
 
 
