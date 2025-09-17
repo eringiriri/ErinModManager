@@ -17,7 +17,7 @@ ZIP_FILENAME_FMT = "{}_download.zip"
 UNPACK_DIR_FMT = "{}_unpack"
 
 WINDOW_TITLE = "RimWorld MOD 日本語化インストーラー"
-WINDOW_SIZE = "520x320"
+WINDOW_SIZE = "520x360"
 LABEL_DESCRIPTION = "日本語化パックのURLを入力し、Enterを押してください。"
 ENTRY_WIDTH = 70
 LABEL_STATUS_COLOR = "#007000"
@@ -29,3 +29,7 @@ REFERER_FMT = "https://rimworld.2game.info/detail.php?id={}"
 USER_AGENT = "RimWorldJapanizer/1.0 (+https://rimworld.2game.info)"
 CHUNK_SIZE = 1024 * 100
 TIMEOUT = 30
+
+# CSVファイル関連
+CSV_FILENAME = "rimworld_translation_list.csv"
+CSV_ENCODING = 'utf-8-sig'

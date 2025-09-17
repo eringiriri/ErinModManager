@@ -2,15 +2,15 @@ import os
 import csv
 import json
 import shutil
-import logging
 import time
 from datetime import datetime
 from collections import defaultdict
 
-from config import MODS_DIR, LOCAL_MODS_DIR, LOGS_DIR, TMP_DIR, OLD_DIR, LANG_DIR_NAME, JP_DIR_NAME
+from config import MODS_DIR, LOCAL_MODS_DIR, LOGS_DIR, TMP_DIR, OLD_DIR, LANG_DIR_NAME, JP_DIR_NAME, CSV_FILENAME, CSV_ENCODING
 from utils import sanitize_filename, get_mod_name_from_xml, force_remove, find_japanese_dir
 from downloader import download_zip, is_archive_file, extract_archive
 from translation_scraper import scrape_and_save_to_csv
+from logger import get_logger
 
 
 class AutoJapanizer:
@@ -18,25 +18,10 @@ class AutoJapanizer:
     
     def __init__(self, pman):
         self.pman = pman
-        self.logger = self._setup_logger()
+        self.logger = get_logger("AutoJapanizer")
         self.status_file = os.path.join(LOGS_DIR, "japanization_status.json")
-        self.csv_file = os.path.join(LOGS_DIR, "rimworld_translation_list.csv")
+        self.csv_file = os.path.join(LOGS_DIR, CSV_FILENAME)
         
-    def _setup_logger(self):
-        """ログ設定"""
-        os.makedirs(LOGS_DIR, exist_ok=True)
-        log_file = os.path.join(LOGS_DIR, f"auto_japanizer_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-        
-        logger = logging.getLogger("AutoJapanizer")
-        if logger.hasHandlers():
-            logger.handlers.clear()
-            
-        logger.setLevel(logging.INFO)
-        handler = logging.FileHandler(log_file, encoding='utf-8')
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        return logger
         
     def load_japanization_status(self):
         """適用済みFile IDの状態を読み込む"""
@@ -64,7 +49,7 @@ class AutoJapanizer:
             
         translations = []
         try:
-            with open(self.csv_file, 'r', encoding='utf-8-sig') as f:
+            with open(self.csv_file, 'r', encoding=CSV_ENCODING) as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     translations.append({
@@ -324,7 +309,6 @@ class AutoJapanizer:
             self.pman.popup_error(f"一括日本語化処理中にエラーが発生しました。\n{e}")
         finally:
             self.logger.info("=== 一括日本語化処理終了 ===")
-            logging.shutdown()
 
 
 def run_auto_japanization(pman):

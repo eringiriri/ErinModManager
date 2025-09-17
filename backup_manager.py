@@ -1,29 +1,138 @@
 import os
 import shutil
 import datetime
-import logging
 import filecmp
 from collections import defaultdict
 
 from config import MODS_DIR, LOCAL_MODS_DIR, BACKUP_ROOT, LOGS_DIR
 from utils import get_mod_name_from_xml, sanitize_filename
+from logger import get_logger
 
 
 # mod_comparator.pyの機能を統合
-def are_dirs_equal(dir1, dir2):
-    """2つのディレクトリの内容が同じか高速に比較する"""
+def are_dirs_equal(dir1, dir2, logger=None, pman=None):
+    """2つのディレクトリの内容が同じか高速に比較する（ハッシュベース最適化版）"""
     if not os.path.isdir(dir1) or not os.path.isdir(dir2):
         return False
-        
-    dcmp = filecmp.dircmp(dir1, dir2)
-    if dcmp.diff_files or dcmp.left_only or dcmp.right_only:
-        return False
     
-    for sub_dcmp in dcmp.subdirs.values():
-        if not are_dirs_equal(sub_dcmp.left, sub_dcmp.right):
-            return False
+    try:
+        # ハッシュベースの高速比較
+        return _compare_dirs_with_hash(dir1, dir2, logger, pman)
+    except Exception as e:
+        # エラーが発生した場合は従来の方法で比較
+        return _detailed_dir_comparison(dir1, dir2)
+
+def _compare_dirs_with_hash(dir1, dir2, logger=None, pman=None):
+    """ハッシュベースの高速ディレクトリ比較"""
+    import hashlib
+    import time
+    
+    # ディレクトリのハッシュを計算
+    hash1 = _calculate_dir_hash(dir1, logger, pman)
+    hash2 = _calculate_dir_hash(dir2, logger, pman)
+    
+    return hash1 == hash2
+
+def _calculate_dir_hash(dir_path, logger=None, pman=None):
+    """ディレクトリ全体のハッシュを計算（ファイル内容も含む）"""
+    import hashlib
+    import os
+    import time
+    
+    hasher = hashlib.md5()
+    
+    # ファイルパスをソートして一意性を保つ
+    file_paths = []
+    for root, dirs, files in os.walk(dir_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            rel_path = os.path.relpath(file_path, dir_path)
+            file_paths.append(rel_path)
+    
+    file_paths.sort()
+    total_files = len(file_paths)
+    start_time = time.time()
+    
+    if logger and total_files > 100:  # 100ファイル以上の場合のみ進捗表示
+        logger.info(f"      -> ハッシュ計算進捗: 0/{total_files:,}ファイル (0.00%)")
+    
+    for i, rel_path in enumerate(file_paths):
+        full_path = os.path.join(dir_path, rel_path)
+        try:
+            # ファイルパスをハッシュに追加
+            hasher.update(rel_path.encode('utf-8'))
             
-    return True
+            # ファイルサイズをハッシュに追加
+            file_size = os.path.getsize(full_path)
+            hasher.update(str(file_size).encode('utf-8'))
+            
+            # ファイルの修正時間をハッシュに追加
+            mtime = os.path.getmtime(full_path)
+            hasher.update(str(mtime).encode('utf-8'))
+            
+            # 小さいファイル（1MB以下）は内容もハッシュに含める
+            if file_size <= 1024 * 1024:  # 1MB
+                with open(full_path, 'rb') as f:
+                    # ファイルの先頭と末尾の一部を読み取る（高速化）
+                    chunk_size = min(8192, file_size)
+                    if file_size > 0:
+                        f.seek(0)
+                        chunk = f.read(chunk_size)
+                        hasher.update(chunk)
+                        
+                        # ファイルが大きい場合は末尾も読み取る
+                        if file_size > chunk_size * 2:
+                            f.seek(-chunk_size, 2)
+                            chunk = f.read(chunk_size)
+                            hasher.update(chunk)
+            
+        except (OSError, IOError):
+            # ファイルが読めない場合はパスとサイズのみでハッシュ
+            hasher.update(rel_path.encode('utf-8'))
+            hasher.update(b'0')  # サイズ0として扱う
+        
+        # 進捗表示（100ファイルごと、または最後のファイル）
+        if total_files > 100 and (i + 1) % 100 == 0 or i == total_files - 1:
+            elapsed = time.time() - start_time
+            progress = (i + 1) / total_files * 100
+            files_per_sec = (i + 1) / elapsed if elapsed > 0 else 0
+            
+            # ログに進捗を記録
+            if logger:
+                logger.info(f"      -> ハッシュ計算進捗: {i+1:,}/{total_files:,}ファイル ({progress:.1f}%) - {files_per_sec:.1f}ファイル/秒")
+            
+            # GUIに進捗を表示
+            if pman:
+                pman.set_status(f"ハッシュ計算中: {i+1:,}/{total_files:,}ファイル ({progress:.1f}%) - {files_per_sec:.1f}ファイル/秒")
+    
+    total_elapsed = time.time() - start_time
+    if total_files > 0:
+        files_per_sec = total_files / total_elapsed if total_elapsed > 0 else 0
+        
+        # ログに完了情報を記録
+        if logger:
+            logger.info(f"      -> ハッシュ計算完了: {total_files:,}ファイル, {total_elapsed:,.2f}秒 ({files_per_sec:.1f}ファイル/秒)")
+        
+        # GUIに完了情報を表示
+        if pman:
+            pman.set_status(f"ハッシュ計算完了: {total_files:,}ファイル ({total_elapsed:,.2f}秒)")
+    
+    return hasher.hexdigest()
+
+def _detailed_dir_comparison(dir1, dir2):
+    """詳細なディレクトリ比較（フォールバック用）"""
+    try:
+        dcmp = filecmp.dircmp(dir1, dir2)
+        if dcmp.diff_files or dcmp.left_only or dcmp.right_only:
+            return False
+        
+        for sub_dcmp in dcmp.subdirs.values():
+            if not _detailed_dir_comparison(sub_dcmp.left, sub_dcmp.right):
+                return False
+                
+        return True
+    except Exception:
+        return False
 
 class ModStatus:
     """MODの比較結果を表すステータス"""
@@ -31,56 +140,103 @@ class ModStatus:
     DUPLICATE = "DUPLICATE"
     NEEDS_BACKUP = "NEEDS_BACKUP"
 
-def compare_mod_versions(mod_info, historical_mods, copied_versions_by_id, logger):
+def compare_mod_versions(mod_info, historical_mods, copied_versions_by_id, logger, pman=None):
     """
     MODを過去のバックアップと現在の実行ですでにコピーされたものと比較する.
     
     Returns:
         ModStatus: 比較結果のステータス
     """
+    import time
     current_path = mod_info['path']
     mod_id = mod_info['mod_id']
+    
+    # ファイル数を事前にチェック
+    try:
+        file_count = sum(len(files) for root, dirs, files in os.walk(current_path))
+        logger.info(f"  -> MODファイル数: {file_count:,}個")
+        if pman:
+            pman.set_status(f"MOD比較中: {file_count:,}ファイル")
+    except Exception:
+        file_count = 0
     
     # ステップ1: 過去のバックアップとの比較
     logger.info("  -> ステップ1: 過去のバックアップとの比較を開始...")
     if mod_id in historical_mods:
-        for old_path in historical_mods[mod_id]:
-            if are_dirs_equal(current_path, old_path):
+        total_backups = len(historical_mods[mod_id])
+        for i, old_path in enumerate(historical_mods[mod_id]):
+            backup_name = os.path.basename(old_path)
+            logger.info(f"    -> 比較中 ({i+1:,}/{total_backups:,}): {backup_name}")
+            if pman:
+                pman.set_status(f"バックアップ比較中 ({i+1:,}/{total_backups:,}): {backup_name}")
+            start_time = time.time()
+            
+            # ハッシュ計算の進捗を表示
+            logger.info(f"    -> ハッシュ計算中...")
+            if pman:
+                pman.set_status(f"ハッシュ計算中 ({i+1:,}/{total_backups:,}): {backup_name}")
+            hash_start = time.time()
+            if are_dirs_equal(current_path, old_path, logger, pman):
+                hash_elapsed = time.time() - hash_start
+                total_elapsed = time.time() - start_time
                 logger.info(f"    -> 結果: 同一のバージョンを過去のバックアップで発見しました。({old_path})")
+                logger.info(f"    -> ハッシュ計算時間: {hash_elapsed:,.2f}秒, 総比較時間: {total_elapsed:,.2f}秒")
+                if pman:
+                    pman.set_status(f"同一バージョン発見: {backup_name} ({total_elapsed:,.2f}秒)")
                 return ModStatus.UNCHANGED
+            else:
+                hash_elapsed = time.time() - hash_start
+                total_elapsed = time.time() - start_time
+                logger.info(f"    -> 結果: 内容が異なります")
+                logger.info(f"    -> ハッシュ計算時間: {hash_elapsed:,.2f}秒, 総比較時間: {total_elapsed:,.2f}秒")
         logger.info("    -> 結果: 過去のバックアップに同一バージョンはありませんでした。")
+        if pman:
+            pman.set_status("過去のバックアップに同一バージョンなし")
     else:
         logger.info("    -> 結果: このMODの過去のバックアップはありません。")
+        if pman:
+            pman.set_status("過去のバックアップなし")
 
     # ステップ2: 今回の実行内での重複チェック
     logger.info("  -> ステップ2: 今回の実行内での重複チェックを開始...")
     if mod_id in copied_versions_by_id:
-        for copied_path in copied_versions_by_id[mod_id]:
-            if are_dirs_equal(current_path, copied_path):
+        total_copied = len(copied_versions_by_id[mod_id])
+        for i, copied_path in enumerate(copied_versions_by_id[mod_id]):
+            copied_name = os.path.basename(copied_path)
+            logger.info(f"    -> 比較中 ({i+1:,}/{total_copied:,}): {copied_name}")
+            if pman:
+                pman.set_status(f"重複チェック中 ({i+1:,}/{total_copied:,}): {copied_name}")
+            start_time = time.time()
+            
+            # ハッシュ計算の進捗を表示
+            logger.info(f"    -> ハッシュ計算中...")
+            if pman:
+                pman.set_status(f"ハッシュ計算中 ({i+1:,}/{total_copied:,}): {copied_name}")
+            hash_start = time.time()
+            if are_dirs_equal(current_path, copied_path, logger, pman):
+                hash_elapsed = time.time() - hash_start
+                total_elapsed = time.time() - start_time
                 logger.info(f"    -> 結果: 同一内容のバージョンが今回の処理で既にバックアップ済みです。({copied_path})")
+                logger.info(f"    -> ハッシュ計算時間: {hash_elapsed:,.2f}秒, 総比較時間: {total_elapsed:,.2f}秒")
+                if pman:
+                    pman.set_status(f"重複発見: {copied_name} ({total_elapsed:,.2f}秒)")
                 return ModStatus.DUPLICATE
+            else:
+                hash_elapsed = time.time() - hash_start
+                total_elapsed = time.time() - start_time
+                logger.info(f"    -> 結果: 内容が異なります")
+                logger.info(f"    -> ハッシュ計算時間: {hash_elapsed:,.2f}秒, 総比較時間: {total_elapsed:,.2f}秒")
         logger.info("    -> 結果: 今回バックアップ済みのバージョンとは内容が異なります。")
+        if pman:
+            pman.set_status("重複なし - バックアップ必要")
     else:
         logger.info("    -> 結果: このMOD IDは今回の実行で初めて処理されます。")
+        if pman:
+            pman.set_status("初回処理 - バックアップ必要")
 
     return ModStatus.NEEDS_BACKUP
 
 
-def setup_logger(log_name):
-    """バックアップ処理用のロガーをセットアップする"""
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    log_file = os.path.join(LOGS_DIR, f"{log_name}.log")
-
-    logger = logging.getLogger(log_name)
-    if logger.hasHandlers():
-        logger.handlers.clear()
-
-    logger.setLevel(logging.INFO)
-    handler = logging.FileHandler(log_file, encoding='utf-8')
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    return logger
 
 
 def get_all_backups(backup_root):
@@ -97,11 +253,10 @@ def get_all_backups(backup_root):
 
 def backup_mods(pman):
     """差分を考慮してMODをバックアップし、詳細なログを記録する。"""
-    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_name = f"backup_{now_str}"
-    logger = setup_logger(log_name)
+    logger = get_logger("BackupManager")
 
-    new_backup_dir = os.path.join(BACKUP_ROOT, log_name)
+    now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    new_backup_dir = os.path.join(BACKUP_ROOT, f"backup_{now_str}")
 
     try:
         logger.info("================ バックアップ処理開始 ================")
@@ -177,7 +332,7 @@ def backup_mods(pman):
             logger.info(f"==> 処理中 ({idx + 1}/{total_mods}): {display_name} [{mod_id}]")
             pman.set_status(f"({idx + 1}/{total_mods}) 比較中: {display_name}")
 
-            status = compare_mod_versions(mod_info, historical_mods, copied_versions_by_id, logger)
+            status = compare_mod_versions(mod_info, historical_mods, copied_versions_by_id, logger, pman)
 
             logger.info("  -> ステップ3: 最終判断")
             if status == ModStatus.UNCHANGED:
@@ -238,4 +393,3 @@ def backup_mods(pman):
         pman.popup_error(f"バックアップ中にエラーが発生しました。\n{e}")
     finally:
         logger.info("================ バックアップ処理終了 ================")
-        logging.shutdown()

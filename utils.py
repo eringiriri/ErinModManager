@@ -1,7 +1,10 @@
 import os
 import re
 import stat
+import io
 import xml.etree.ElementTree as ET
+import requests
+from PIL import Image, ImageTk
 
 from config import JP_DIR_NAME
 
@@ -70,3 +73,45 @@ def find_japanese_dir(root):
             if dirname.lower().startswith("japanese"):
                 return os.path.join(dirpath, dirname)
     return None
+
+def open_folder(path, folder_name, pman=None):
+    """指定されたパスのフォルダを開き、存在しない場合は作成する"""
+    try:
+        if not os.path.isdir(path):
+            # フォルダが存在しない場合、作成を試みる
+            os.makedirs(path, exist_ok=True)
+            if pman:
+                pman.popup_info(f"{folder_name} が見つからなかったため、作成しました。\nパス: {path}")
+
+        # フォルダを開く
+        os.startfile(path)
+    except Exception as e:
+        if pman:
+            pman.popup_error(f"{folder_name} を開けませんでした。\nパス: {path}\nエラー: {e}")
+        raise
+
+def load_website_icon(button, icon_url="https://rimworld.2game.info/images/icon48x48.png"):
+    """ウェブサイトのアイコンを読み込んでボタンに設定する"""
+    try:
+        # アイコンをダウンロード
+        response = requests.get(icon_url, timeout=10)
+        response.raise_for_status()
+        
+        # PILで画像を読み込み
+        icon_image = Image.open(io.BytesIO(response.content))
+        
+        # 32x32にリサイズ（ボタンに適したサイズ）
+        icon_image = icon_image.resize((32, 32), Image.Resampling.LANCZOS)
+        
+        # Tkinter用のPhotoImageに変換
+        website_icon = ImageTk.PhotoImage(icon_image)
+        
+        # ボタンにアイコンを設定（アイコン自体がボタンになる）
+        button.config(image=website_icon)
+        
+        # 参照を保持（ガベージコレクション防止）
+        button.image = website_icon
+        
+    except Exception as e:
+        # アイコンの読み込みに失敗した場合はエモジで表示
+        button.config(text="🌐", font=("Arial", 16))

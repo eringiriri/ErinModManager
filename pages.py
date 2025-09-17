@@ -12,3 +12,7 @@ def open_steam_workshop(mod_id):
     """MODのSteam Workshopページを開く"""
     steam_url = STEAM_URL_FMT.format(mod_id)
     webbrowser.open(steam_url)
+
+def open_rimworld_2game():
+    """rimworld.2game.infoサイトを開く"""
+    webbrowser.open("https://rimworld.2game.info/")

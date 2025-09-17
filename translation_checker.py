@@ -3,15 +3,11 @@ import csv
 import requests
 from bs4 import BeautifulSoup
 
-from config import LOGS_DIR
+from config import LOGS_DIR, CSV_FILENAME, CSV_ENCODING
 from translation_scraper import format_mod_update_date
+from logger import get_logger
 
-# chardetの可用性チェック
-try:
-    import chardet
-    CHARDET_AVAILABLE = True
-except ImportError:
-    CHARDET_AVAILABLE = False
+import chardet
 
 
 class TranslationChecker:
@@ -19,7 +15,8 @@ class TranslationChecker:
     
     def __init__(self, pman):
         self.pman = pman
-        self.csv_file = os.path.join(LOGS_DIR, "rimworld_translation_list.csv")
+        self.logger = get_logger("TranslationChecker")
+        self.csv_file = os.path.join(LOGS_DIR, CSV_FILENAME)
         
     def check_for_updates(self):
         """ウェブサイトの最新投稿をチェックして、CSVにないFile IDを追加"""
@@ -31,7 +28,7 @@ class TranslationChecker:
             csv_exists = os.path.exists(self.csv_file)
             
             if csv_exists:
-                with open(self.csv_file, 'r', encoding='utf-8-sig') as f:
+                with open(self.csv_file, 'r', encoding=CSV_ENCODING) as f:
                     reader = csv.DictReader(f)
                     existing_file_ids = {row['File ID'] for row in reader}
                 self.pman.set_progress(f"既存のCSVファイルから {len(existing_file_ids)} 件のFile IDを読み込み")
@@ -82,12 +79,9 @@ class TranslationChecker:
             response.raise_for_status()
             
             # 文字コードを自動検出
-            if CHARDET_AVAILABLE:
-                detected_encoding = chardet.detect(response.content)
-                if detected_encoding['encoding'] and detected_encoding['confidence'] > 0.7:
-                    response.encoding = detected_encoding['encoding']
-                else:
-                    response.encoding = 'utf-8'
+            detected_encoding = chardet.detect(response.content)
+            if detected_encoding['encoding'] and detected_encoding['confidence'] > 0.7:
+                response.encoding = detected_encoding['encoding']
             else:
                 response.encoding = 'utf-8'
             
@@ -135,6 +129,7 @@ class TranslationChecker:
         except Exception as e:
             self.pman.popup_error(f"最新投稿の取得に失敗しました。\n{e}")
             return []
+
     
     def _append_to_csv(self, new_translations, added_file_ids):
         """新しい翻訳をCSVファイルに追加"""
@@ -142,7 +137,7 @@ class TranslationChecker:
         translations_to_add = [t for t in new_translations if t['File ID'] in added_file_ids]
         
         # CSVファイルに追加
-        with open(self.csv_file, 'a', newline='', encoding='utf-8-sig') as csvfile:
+        with open(self.csv_file, 'a', newline='', encoding=CSV_ENCODING) as csvfile:
             writer = csv.writer(csvfile)
             for translation in translations_to_add:
                 writer.writerow([

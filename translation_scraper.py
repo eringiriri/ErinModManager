@@ -7,20 +7,15 @@ import sys
 import re
 from datetime import datetime
 
-try:
-    import chardet
-    CHARDET_AVAILABLE = True
-except ImportError:
-    CHARDET_AVAILABLE = False
-    print("警告: chardetライブラリがインストールされていません。文字コード自動検出が無効になります。")
-    print("インストールするには: pip install chardet")
+import chardet
 
 # --- 設定 ---
-from config import LOGS_DIR
+from config import LOGS_DIR, CSV_FILENAME, CSV_ENCODING
+from logger import get_logger
 
 URL_FMT = "https://rimworld.2game.info/uploader_translation.php?id=&page={}"
 OUTPUT_DIR = LOGS_DIR
-OUTPUT_FILENAME = "rimworld_translation_list.csv"
+# OUTPUT_FILENAMEはconfig.pyのCSV_FILENAMEを使用
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
@@ -66,9 +61,11 @@ def scrape_and_save_to_csv(pman=None):
     サイトの全ページを巡回し、MOD情報を取得してCSVファイルに保存します。
     現在の処理状況をコンソールに詳細表示します。
     """
+    logger = get_logger("TranslationScraper")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    output_filepath = os.path.join(OUTPUT_DIR, OUTPUT_FILENAME)
+    output_filepath = os.path.join(OUTPUT_DIR, CSV_FILENAME)
 
+    logger.info("翻訳リスト取得開始")
     if pman:
         pman.set_progress("データの取得を開始します...")
     else:
@@ -78,7 +75,7 @@ def scrape_and_save_to_csv(pman=None):
     processed_count = 0
     scanned_pages = 0
     try:
-        with open(output_filepath, 'w', newline='', encoding='utf-8-sig') as csvfile:
+        with open(output_filepath, 'w', newline='', encoding=CSV_ENCODING) as csvfile:
             csv_writer = csv.writer(csvfile)
             
             header = ["Page Number", "File ID", "MOD ID", "MOD Name", "Mod-Update-Date", "JP-File-Upload-Date", "Size"]
@@ -99,19 +96,14 @@ def scrape_and_save_to_csv(pman=None):
                     response.raise_for_status()
                     
                     # 文字コードを自動検出して設定
-                    if CHARDET_AVAILABLE:
-                        detected_encoding = chardet.detect(response.content)
-                        if detected_encoding['encoding'] and detected_encoding['confidence'] > 0.7:
-                            response.encoding = detected_encoding['encoding']
-                            print(f"  文字コードを検出: {detected_encoding['encoding']} (信頼度: {detected_encoding['confidence']:.2f})")
-                        else:
-                            # 検出に失敗した場合はUTF-8を試す
-                            response.encoding = 'utf-8'
-                            print(f"  文字コード検出失敗、UTF-8を使用")
+                    detected_encoding = chardet.detect(response.content)
+                    if detected_encoding['encoding'] and detected_encoding['confidence'] > 0.7:
+                        response.encoding = detected_encoding['encoding']
+                        print(f"  文字コードを検出: {detected_encoding['encoding']} (信頼度: {detected_encoding['confidence']:.2f})")
                     else:
-                        # chardetが利用できない場合はUTF-8を使用
+                        # 検出に失敗した場合はUTF-8を試す
                         response.encoding = 'utf-8'
-                        print(f"  UTF-8を使用（chardet未インストール）")
+                        print(f"  文字コード検出失敗、UTF-8を使用")
                         
                 except requests.exceptions.RequestException as e:
                     print(f"\nエラー: ページ {page_number + 1} の取得に失敗しました: {e}", file=sys.stderr)
@@ -172,6 +164,7 @@ def scrape_and_save_to_csv(pman=None):
         print(f"\n予期せぬエラーが発生しました: {e}", file=sys.stderr)
     finally:
         completion_info = f"処理完了 - スキャン: {scanned_pages}ページ, 取得: {processed_count}件"
+        logger.info(f"翻訳リスト取得完了: {scanned_pages}ページ, {processed_count}件")
         print(f"\n--- 処理完了 ---")
         print(f"スキャンした総ページ数: {scanned_pages} ページ")
         print(f"取得した総データ件数: {processed_count} 件")
