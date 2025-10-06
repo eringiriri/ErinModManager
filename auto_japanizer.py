@@ -7,7 +7,7 @@ from datetime import datetime
 from collections import defaultdict
 
 from config import MODS_DIR, LOCAL_MODS_DIR, LOGS_DIR, TMP_DIR, OLD_DIR, LANG_DIR_NAME, JP_DIR_NAME, CSV_FILENAME, CSV_ENCODING
-from utils import sanitize_filename, get_mod_name_from_xml, force_remove, find_japanese_dir
+from utils import sanitize_filename, get_mod_name_from_xml, force_remove, find_japanese_dir, determine_placement_locations, copy_japanese_to_locations
 from downloader import download_zip, is_archive_file, extract_archive
 from translation_scraper import scrape_and_save_to_csv
 from logger import get_logger
@@ -215,20 +215,33 @@ class AutoJapanizer:
                 self.logger.error(f"Japaneseフォルダが見つかりません: {file_id}")
                 return False
                 
-            # 既存のJapaneseフォルダをバックアップ
+            # 適切な配置場所を決定
             mod_path = mod_info['path']
-            dest_jp_dir = os.path.join(mod_path, LANG_DIR_NAME, JP_DIR_NAME)
+            placement_locations = determine_placement_locations(mod_path)
             
-            if os.path.exists(dest_jp_dir):
+            if not placement_locations:
+                self.logger.error(f"適切な配置場所が見つかりません: {mod_path}")
+                return False
+            
+            # 既存のJapaneseフォルダをバックアップ（最初の配置場所のみ）
+            first_dest = os.path.join(placement_locations[0], JP_DIR_NAME)
+            if os.path.exists(first_dest):
                 backup_dir = os.path.join(OLD_DIR, f"{mod_id}_old_japanese")
                 if os.path.exists(backup_dir):
                     shutil.rmtree(backup_dir, onerror=force_remove)
-                shutil.move(dest_jp_dir, backup_dir)
+                shutil.move(first_dest, backup_dir)
                 self.logger.info(f"既存のJapaneseフォルダをバックアップ: {backup_dir}")
-                
-            # 新しいJapaneseフォルダをコピー
-            shutil.copytree(jp_dir, dest_jp_dir)
-            self.logger.info(f"Japaneseフォルダをコピー完了: {dest_jp_dir}")
+            
+            # 複数箇所にJapaneseフォルダをコピー
+            success_count, total_count = copy_japanese_to_locations(jp_dir, placement_locations, self.logger)
+            
+            if success_count == 0:
+                self.logger.error(f"Japaneseフォルダのコピーに失敗: {mod_path}")
+                return False
+            elif success_count < total_count:
+                self.logger.warning(f"Japaneseフォルダを{success_count}/{total_count}箇所にコピー: {mod_path}")
+            else:
+                self.logger.info(f"Japaneseフォルダを{total_count}箇所にコピー完了: {mod_path}")
             
             # ステータス更新
             status = self.load_japanization_status()
